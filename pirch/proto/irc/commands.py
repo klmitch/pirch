@@ -224,3 +224,7 @@ Command.register(
     Command(b'PONG')
     .add_argument(Argument('token', 0))
 )
+
+
+# Not the final implementation of this one
+get_command = Command.lookup
