@@ -102,12 +102,21 @@ class CommandTest(unittest.TestCase):
 
         self.assertEqual(result, 'fake')
 
-    def test_init(self):
+    def test_init_base(self):
         result = commands.Command(b'PING')
 
         self.assertEqual(result.cmd, b'PING')
         self.assertEqual(result._arguments, {})
         self.assertIsNone(result._argset)
+        self.assertIsNone(result.numeric)
+
+    def test_init_numeric(self):
+        result = commands.Command(b'010')
+
+        self.assertEqual(result.cmd, b'010')
+        self.assertEqual(result._arguments, {})
+        self.assertIsNone(result._argset)
+        self.assertEqual(result.numeric, 10)
 
     def test_contains_false(self):
         cmd = commands.Command(b'PING')
@@ -168,3 +177,132 @@ class CommandTest(unittest.TestCase):
 
         self.assertEqual(cmd.arguments, {'a', 'b', 'c'})
         self.assertEqual(cmd._argset, {'a', 'b', 'c'})
+
+
+class UnknownCommandTest(unittest.TestCase):
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    def test_new_exists(self):
+        commands.UnknownCommand._registry[b'PING'] = 'unk_cmd'
+
+        result = commands.UnknownCommand(b'PING')
+
+        self.assertEqual(result, 'unk_cmd')
+        self.assertEqual(commands.UnknownCommand._registry,
+                         {b'PING': 'unk_cmd'})
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    def test_new_missing(self):
+        result = commands.UnknownCommand(b'PING')
+
+        self.assertIsInstance(result, commands.UnknownCommand)
+        self.assertEqual(result.cmd, b'PING')
+        self.assertIsNone(result.numeric)
+        self.assertIsNone(result._command_cache)
+        self.assertEqual(commands.UnknownCommand._registry,
+                         {b'PING': result})
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    def test_new_missing_numeric(self):
+        result = commands.UnknownCommand(b'010')
+
+        self.assertIsInstance(result, commands.UnknownCommand)
+        self.assertEqual(result.cmd, b'010')
+        self.assertEqual(result.numeric, 10)
+        self.assertIsNone(result._command_cache)
+        self.assertEqual(commands.UnknownCommand._registry,
+                         {b'010': result})
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command', None)
+    def test_contains_base(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertFalse('token' in cmd)
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command', {'token': 'arg'})
+    def test_contains_proxy(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertTrue('token' in cmd)
+        self.assertFalse('unknown' in cmd)
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command', None)
+    def test_getitem_base(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertRaises(KeyError, lambda: cmd['token'])
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command', {'token': 'arg'})
+    def test_getitem_proxy(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertEqual(cmd['token'], 'arg')
+        self.assertRaises(KeyError, lambda: cmd['unknown'])
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command', None)
+    def test_arguments_base(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertEqual(cmd.arguments, set())
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.UnknownCommand, '_command',
+                       mock.Mock(arguments='arguments'))
+    def test_arguments_proxy(self):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertEqual(cmd.arguments, 'arguments')
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.Command, 'lookup', return_value='command')
+    def test_command_cached(self, mock_lookup):
+        cmd = commands.UnknownCommand(b'PING')
+        cmd._command_cache = 'cached'
+
+        self.assertEqual(cmd._command, 'cached')
+        self.assertEqual(cmd._command_cache, 'cached')
+        self.assertFalse(mock_lookup.called)
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.Command, 'lookup',
+                       side_effect=KeyError(b'PING'))
+    def test_command_uncached_undeclared(self, mock_lookup):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertIsNone(cmd._command)
+        self.assertIsNone(cmd._command_cache)
+        mock_lookup.assert_called_once_with(b'PING')
+
+    @mock.patch.object(commands.UnknownCommand, '_registry', {})
+    @mock.patch.object(commands.Command, 'lookup', return_value='command')
+    def test_command_uncached(self, mock_lookup):
+        cmd = commands.UnknownCommand(b'PING')
+
+        self.assertEqual(cmd._command, 'command')
+        self.assertEqual(cmd._command_cache, 'command')
+        mock_lookup.assert_called_once_with(b'PING')
+
+
+class GetCommandTest(unittest.TestCase):
+    @mock.patch.object(commands.Command, 'lookup', return_value='command')
+    @mock.patch.object(commands, 'UnknownCommand', return_value='unknown')
+    def test_known(self, mock_UnknownCommand, mock_lookup):
+        result = commands.get_command(b'PING')
+
+        self.assertEqual(result, 'command')
+        mock_lookup.assert_called_once_with(b'PING')
+        self.assertFalse(mock_UnknownCommand.called)
+
+    @mock.patch.object(commands.Command, 'lookup',
+                       side_effect=KeyError(b'PING'))
+    @mock.patch.object(commands, 'UnknownCommand', return_value='unknown')
+    def test_unknown(self, mock_UnknownCommand, mock_lookup):
+        result = commands.get_command(b'PING')
+
+        self.assertEqual(result, 'unknown')
+        mock_lookup.assert_called_once_with(b'PING')
+        mock_UnknownCommand.assert_called_once_with(b'PING')

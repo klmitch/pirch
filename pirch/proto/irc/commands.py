@@ -14,6 +14,8 @@
 # along with this program.  If not, see
 # <http://www.gnu.org/licenses/>.
 
+import weakref
+
 from pirch import util
 
 
@@ -161,11 +163,14 @@ class Command(object):
         self._arguments = {}
         self._argset = None
 
+        # Determine if this is a numeric
+        self.numeric = int(cmd) if len(cmd) == 3 and cmd.isdigit() else None
+
     def __contains__(self, name):
         """
         Determine if an argument has been declared.
 
-        :params name: The name of the argument.
+        :param name: The name of the argument.
 
         :returns: A ``True`` value if the argument has been declared,
                   ``False`` otherwise.
@@ -215,6 +220,85 @@ class Command(object):
         return self._argset
 
 
+class UnknownCommand(object):
+    """
+    Represent an unknown IRC command or numeric.  This acts as a
+    proxy, allowing the command to be defined later.
+    """
+
+    # A registry of unknown commands
+    _registry = weakref.WeakValueDictionary()
+
+    def __new__(cls, cmd):
+        """
+        Allocate an ``UnknownCommand`` instance.
+
+        :param cmd: The ``bytes`` for the command, e.g. b"PING", etc.
+        """
+
+        # First, look it up in the registry
+        inst = cls._registry.get(cmd)
+        if inst is None:
+            # Allocate a new one
+            inst = super(UnknownCommand, cls).__new__(cls)
+            inst.cmd = cmd
+            inst.numeric = (int(cmd) if len(cmd) == 3 and cmd.isdigit()
+                            else None)
+            inst._command_cache = None
+            cls._registry[cmd] = inst
+
+        return inst
+
+    def __contains__(self, name):
+        """
+        Determine if an argument has been declared.
+
+        :param name: The name of the argument.
+
+        :returns: A ``True`` value if the argument has been declared,
+                  ``False`` otherwise.
+        """
+
+        return (name in self._command) if self._command else False
+
+    def __getitem__(self, name):
+        """
+        Retrieve an appropriate ``Argument`` instance describing the
+        argument with a given name.
+
+        :param name: The name of the argument.
+
+        :returns: The ``Argument`` instance for the argument.
+        """
+
+        if self._command:
+            return self._command[name]
+        raise KeyError(name)
+
+    @property
+    def arguments(self):
+        """
+        Retrieve a set of all recognized argument names.
+        """
+
+        return self._command.arguments if self._command else set()
+
+    @property
+    def _command(self):
+        """
+        Retrieve the underlying command.
+        """
+
+        # Only check for the command if we haven't seen one yet
+        if not self._command_cache:
+            try:
+                self._command_cache = Command.lookup(self.cmd)
+            except KeyError:
+                pass
+
+        return self._command_cache
+
+
 # Register the basic keep-alive commands
 Command.register(
     Command(b'PING')
@@ -226,5 +310,20 @@ Command.register(
 )
 
 
-# Not the final implementation of this one
-get_command = Command.lookup
+def get_command(cmd):
+    """
+    Look up an IRC protocol command.
+
+    :param cmd: The command to look up.
+
+    :returns: An instance of ``Command`` if the command has been
+              declared, or an instance of ``UnknownCommand`` if the
+              command has not been declared.  The ``UnknownCommand``
+              will proxy to a ``Command`` if the command is later
+              declared.
+    """
+
+    try:
+        return Command.lookup(cmd)
+    except KeyError:
+        return UnknownCommand(cmd)
